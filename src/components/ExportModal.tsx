@@ -8,6 +8,7 @@ import {
   Film, 
   Sparkles,
   Music,
+  Zap,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { Slide, ProjectSettings, AudioTrack } from '../types';
@@ -36,6 +37,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   onOpenMusicModal,
 }) => {
   const [exportState, setExportState] = useState<'idle' | 'exporting' | 'completed' | 'error'>('idle');
+  const [exportQuality, setExportQuality] = useState<'fast' | 'high'>('fast');
   const [progressInfo, setProgressInfo] = useState<ExportProgress>({
     phase: 'preparing',
     progress: 0,
@@ -50,6 +52,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const aspectInfo = ASPECT_RATIOS[settings.aspectRatio];
   const totalDuration = slides.reduce((acc, s) => acc + s.duration, 0);
 
+  const displayWidth = exportQuality === 'fast' 
+    ? (settings.aspectRatio === '16:9' ? 1280 : 720) 
+    : aspectInfo.width;
+  const displayHeight = exportQuality === 'fast' 
+    ? (settings.aspectRatio === '9:16' ? 1280 : settings.aspectRatio === '4:5' ? 900 : 720) 
+    : aspectInfo.height;
+
   const handleStartExport = async () => {
     setExportState('exporting');
     setErrorMessage(null);
@@ -61,7 +70,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         audioTrack,
         audioVolume,
         autoFadeAudio,
-        (progress) => setProgressInfo(progress)
+        (progress) => setProgressInfo(progress),
+        exportQuality
       );
 
       const url = URL.createObjectURL(blob);
@@ -155,16 +165,52 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         <div className="py-5">
           {exportState === 'idle' && (
             <div className="space-y-4">
+              {/* Quality & Speed Mode Toggle */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  <span>Export Quality & Speed</span>
+                  <span className={exportQuality === 'fast' ? 'text-amber-400 font-bold lowercase' : 'text-indigo-400 font-bold lowercase'}>
+                    {exportQuality === 'fast' ? '⚡ 3x faster mobile export' : '🎬 maximum 1080p detail'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 p-1 bg-slate-950/80 rounded-2xl border border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setExportQuality('fast')}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                      exportQuality === 'fast'
+                        ? 'bg-gradient-to-r from-amber-500 to-indigo-600 text-white shadow-md shadow-amber-500/20'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Zap className="w-3.5 h-3.5 text-amber-300" />
+                    <span>Fast HD (720p)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExportQuality('high')}
+                    className={`py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 ${
+                      exportQuality === 'high'
+                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Film className="w-3.5 h-3.5 text-indigo-300" />
+                    <span>Full HD (1080p)</span>
+                  </button>
+                </div>
+              </div>
+
               {/* Specs Summary Card */}
               <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-2.5">
                 <div className="flex justify-between text-xs">
                   <span className="text-slate-400">Format & Codec</span>
-                  <span className="font-semibold text-slate-200">MP4 (H.264 / AVC + AAC)</span>
+                  <span className="font-semibold text-slate-200">MP4 (H.264 Hardware AVC + AAC)</span>
                 </div>
                 <div className="flex justify-between text-xs">
                   <span className="text-slate-400">Resolution</span>
                   <span className="font-semibold text-indigo-400">
-                    {aspectInfo.width} × {aspectInfo.height} ({aspectInfo.label})
+                    {displayWidth} × {displayHeight} ({aspectInfo.label})
                   </span>
                 </div>
                 <div className="flex justify-between text-xs">

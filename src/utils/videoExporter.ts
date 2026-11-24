@@ -1,6 +1,6 @@
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 import { Slide, ProjectSettings, AudioTrack } from '../types';
-import { drawSlideFrame } from './canvasRenderer';
+import { drawSlideFrame, createPreblurredBackground } from './canvasRenderer';
 import { WebGLTransitionRenderer } from './transitionRenderer';
 import { globalAudioEngine } from './audioEngine';
 import { preloadImage } from './exif';
@@ -17,35 +17,88 @@ export async function exportSlideshowToMp4(
   audioTrack: AudioTrack | null,
   audioVolume: number,
   autoFadeAudio: boolean,
-  onProgress: (progress: ExportProgress) => void
+  onProgress: (progress: ExportProgress) => void,
+  quality: 'fast' | 'high' = 'fast'
 ): Promise<Blob> {
   if (slides.length === 0) {
     throw new Error('No slides to export');
   }
 
-  onProgress({
-    phase: 'preparing',
-    progress: 5,
-    message: 'Preloading high-resolution images...',
-  });
+  // 1. Calculate resolution based on quality preset
+  let targetWidth = 1080;
+  let targetHeight = 1920;
 
-  // 1. Preload all slide images
-  const loadedImages: HTMLImageElement[] = [];
-  for (let i = 0; i < slides.length; i++) {
-    const img = await preloadImage(slides[i].imageUrl);
-    loadedImages.push(img);
-    onProgress({
-      phase: 'preparing',
-      progress: 5 + Math.round(((i + 1) / slides.length) * 15),
-      message: `Loaded image ${i + 1} of ${slides.length}...`,
-    });
+  if (quality === 'fast') {
+    switch (settings.aspectRatio) {
+      case '9:16':
+        targetWidth = 720;
+        targetHeight = 1280;
+        break;
+      case '16:9':
+        targetWidth = 1280;
+        targetHeight = 720;
+        break;
+      case '1:1':
+        targetWidth = 720;
+        targetHeight = 720;
+        break;
+      case '4:5':
+        targetWidth = 720;
+        targetHeight = 900;
+        break;
+    }
+  } else {
+    switch (settings.aspectRatio) {
+      case '9:16':
+        targetWidth = 1080;
+        targetHeight = 1920;
+        break;
+      case '16:9':
+        targetWidth = 1920;
+        targetHeight = 1080;
+        break;
+      case '1:1':
+        targetWidth = 1080;
+        targetHeight = 1080;
+        break;
+      case '4:5':
+        targetWidth = 1080;
+        targetHeight = 1350;
+        break;
+    }
   }
 
-  const { width, height } = settings.resolution;
+  // Ensure dimensions are even numbers (required by H.264 / AVC encoders)
+  const width = Math.floor(targetWidth / 2) * 2;
+  const height = Math.floor(targetHeight / 2) * 2;
   const fps = settings.fps || 30;
   const totalDuration = slides.reduce((acc, s) => acc + s.duration, 0);
   const totalFrames = Math.ceil(totalDuration * fps);
   const frameDurationMicros = Math.round((1 / fps) * 1_000_000);
+
+  onProgress({
+    phase: 'preparing',
+    progress: 5,
+    message: 'Preloading images & generating accelerated blur backgrounds...',
+  });
+
+  // 2. Preload all slide images & precompute blur backgrounds once
+  const loadedImages: HTMLImageElement[] = [];
+  const preblurredBgs: (HTMLCanvasElement | null)[] = [];
+  for (let i = 0; i < slides.length; i++) {
+    const img = await preloadImage(slides[i].imageUrl);
+    loadedImages.push(img);
+    if (slides[i].crop.fitMode === 'blur-fill') {
+      preblurredBgs.push(createPreblurredBackground(img, width, height));
+    } else {
+      preblurredBgs.push(null);
+    }
+    onProgress({
+      phase: 'preparing',
+      progress: 5 + Math.round(((i + 1) / slides.length) * 15),
+      message: `Prepared photo ${i + 1} of ${slides.length}...`,
+    });
+  }
 
   // 2. Prepare Audio Mixdown if track is selected
   let audioBuffer: AudioBuffer | null = null;
@@ -146,8 +199,9 @@ export async function exportSlideshowToMp4(
     codec: selectedCodec,
     width,
     height,
-    bitrate: Math.min(6_000_000, Math.max(2_500_000, width * height * 2)),
+    bitrate: quality === 'fast' ? 2_800_000 : Math.min(6_000_000, Math.max(2_500_000, width * height * 2)),
     framerate: fps,
+    hardwareAcceleration: 'prefer-hardware',
   });
 
   // 7. Render Video Frames
@@ -165,6 +219,7 @@ export async function exportSlideshowToMp4(
       index: idx,
       slide,
       image: loadedImages[idx],
+      blurredBg: preblurredBgs[idx],
       start,
       end: start + slide.duration,
       duration: slide.duration,
@@ -198,57 +253,77 @@ export async function exportSlideshowToMp4(
       const nextTiming = slideTimings[currentTiming.index + 1];
       const transElapsed = elapsedInSlide - (currentTiming.duration - currentTiming.transitionDuration);
       const transProgress = Math.min(1.0, transElapsed / currentTiming.transitionDuration);
-
-      // Draw current slide to Canvas A
-      drawSlideFrame(ctxA, currentTiming.image, currentTiming.slide, slideProgress, width, height);
-
-      // Draw next slide to Canvas B at start
       const nextSlideProgress = (transElapsed / nextTiming.duration);
-      drawSlideFrame(ctxB, nextTiming.image, nextTiming.slide, nextSlideProgress, width, height);
 
-      let webglSucceeded = false;
-      if (transitionRenderer.isReady()) {
-        try {
-          transitionRenderer.render(
-            canvasA,
-            canvasB,
-            currentTiming.slide.transition.type,
-            transProgress,
-            width,
-            height
-          );
-          outputCtx.clearRect(0, 0, width, height);
-          outputCtx.drawImage(renderCanvas, 0, 0);
-          webglSucceeded = true;
-        } catch (glErr) {
-          console.warn('WebGL transition render failed, using 2D canvas blend:', glErr);
-        }
-      }
-
-      // High-performance 2D canvas blend fallback if WebGL was unavailable or lost
-      if (!webglSucceeded) {
-        outputCtx.clearRect(0, 0, width, height);
-        outputCtx.globalAlpha = 1.0;
-        outputCtx.drawImage(canvasA, 0, 0);
+      // FAST 2D COMPOSITING PATH for 'fade' transition:
+      // Directly render current slide, then blend next slide on top with globalAlpha (0.3ms)!
+      if (currentTiming.slide.transition.type === 'fade') {
+        drawSlideFrame(
+          outputCtx,
+          currentTiming.image,
+          currentTiming.slide,
+          slideProgress,
+          width,
+          height,
+          currentTiming.blurredBg
+        );
         outputCtx.globalAlpha = transProgress;
-        outputCtx.drawImage(canvasB, 0, 0);
+        drawSlideFrame(
+          outputCtx,
+          nextTiming.image,
+          nextTiming.slide,
+          nextSlideProgress,
+          width,
+          height,
+          nextTiming.blurredBg,
+          true // skip clear so it overlays directly on top
+        );
         outputCtx.globalAlpha = 1.0;
+      } else {
+        // SPECIAL SHADER PATH: For wipe, zoom, dissolve transitions
+        drawSlideFrame(ctxA, currentTiming.image, currentTiming.slide, slideProgress, width, height, currentTiming.blurredBg);
+        drawSlideFrame(ctxB, nextTiming.image, nextTiming.slide, nextSlideProgress, width, height, nextTiming.blurredBg);
+
+        let webglSucceeded = false;
+        if (transitionRenderer.isReady()) {
+          try {
+            transitionRenderer.render(
+              canvasA,
+              canvasB,
+              currentTiming.slide.transition.type,
+              transProgress,
+              width,
+              height
+            );
+            outputCtx.drawImage(renderCanvas, 0, 0);
+            webglSucceeded = true;
+          } catch (glErr) {
+            console.warn('WebGL transition render failed, using 2D canvas blend:', glErr);
+          }
+        }
+
+        // High-performance 2D canvas blend fallback if WebGL was unavailable or lost
+        if (!webglSucceeded) {
+          outputCtx.drawImage(canvasA, 0, 0);
+          outputCtx.globalAlpha = transProgress;
+          outputCtx.drawImage(canvasB, 0, 0);
+          outputCtx.globalAlpha = 1.0;
+        }
       }
     } else {
       // Draw single slide directly onto master output canvas
-      outputCtx.clearRect(0, 0, width, height);
-      drawSlideFrame(outputCtx, currentTiming.image, currentTiming.slide, slideProgress, width, height);
+      drawSlideFrame(outputCtx, currentTiming.image, currentTiming.slide, slideProgress, width, height, currentTiming.blurredBg);
     }
 
-    // Hardware encoder backpressure control: ensure queue stays <= 4 frames on mobile chips
-    while (videoEncoder.encodeQueueSize > 4) {
+    // Hardware encoder backpressure control: ensure queue stays <= 8 frames
+    while (videoEncoder.encodeQueueSize > 8) {
       await new Promise<void>((resolve) => {
         const handler = () => {
           videoEncoder.removeEventListener('dequeue', handler);
           resolve();
         };
         videoEncoder.addEventListener('dequeue', handler);
-        setTimeout(handler, 8);
+        setTimeout(handler, 4);
       });
     }
 
