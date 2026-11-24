@@ -55,6 +55,7 @@ export const SimpleActionDock: React.FC<SimpleActionDockProps> = ({
               <img
                 src={slide.imageUrl}
                 alt={`Photo ${idx + 1}`}
+                crossOrigin="anonymous"
                 className="w-full h-full object-cover pointer-events-none"
               />
               <span className="absolute bottom-0.5 left-0.5 text-[9px] font-bold px-1 rounded bg-black/70 text-slate-300">

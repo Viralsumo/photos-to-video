@@ -37,29 +37,29 @@ export const MOTION_PRESETS: { id: MotionType; label: string; icon: string }[] =
   { id: 'pan-down', label: 'Pan Down', icon: 'ArrowDown' },
 ];
 
-// High quality royalty-free sample photos from Unsplash for instant testing
+// High quality royalty-free sample photos bundled locally for instant offline testing and zero CORS issues
 export const SAMPLE_PHOTOS = [
   {
     title: 'Misty Alpine Mountains',
-    url: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=1200&q=80',
+    url: '/samples/mountain.jpg',
     width: 1200,
     height: 800,
   },
   {
     title: 'Golden Sunset Coast',
-    url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1200&q=80',
+    url: '/samples/sunset.jpg',
     width: 1200,
     height: 800,
   },
   {
-    title: 'Emerald Forest Road',
-    url: 'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?auto=format&fit=crop&w=1200&q=80',
+    title: 'Emerald Forest Trail',
+    url: '/samples/forest.jpg',
     width: 1200,
     height: 800,
   },
   {
-    title: 'Neon Tokyo Streets',
-    url: 'https://images.unsplash.com/photo-1503899036084-c55cdd92da26?auto=format&fit=crop&w=1200&q=80',
+    title: 'Desert Sand Dunes',
+    url: '/samples/desert.jpg',
     width: 1200,
     height: 800,
   },

@@ -243,6 +243,7 @@ export const PreviewPlayer: React.FC<PreviewPlayerProps> = ({
                 <img
                   src={currentSlide.imageUrl}
                   alt={currentSlide.id}
+                  crossOrigin="anonymous"
                   className={`select-none pointer-events-none transition-transform duration-75 ${
                     currentSlide.crop.fitMode === 'cover' 
                       ? 'w-full h-full object-cover' 
@@ -279,6 +280,7 @@ export const PreviewPlayer: React.FC<PreviewPlayerProps> = ({
                 <img
                   src={nextSlide.imageUrl}
                   alt={nextSlide.id}
+                  crossOrigin="anonymous"
                   className={`select-none pointer-events-none ${
                     nextSlide.crop.fitMode === 'cover' 
                       ? 'w-full h-full object-cover' 

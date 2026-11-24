@@ -46,22 +46,48 @@ export async function loadImageFromFile(file: File): Promise<{
 }
 
 /**
- * Preload an image URL and resolve with HTMLImageElement
+ * Preload an image URL and resolve with HTMLImageElement safely.
+ * Ensures the resulting image never taints the canvas or causes VideoFrame 'Invalid source state'.
  */
-export function preloadImage(url: string): Promise<HTMLImageElement> {
+export async function preloadImage(url: string): Promise<HTMLImageElement> {
+  // 1. Direct load for blob: and data: URLs (already same-origin, no CORS header needed)
+  if (url.startsWith('blob:') || url.startsWith('data:')) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = (e) => reject(new Error(`Failed to load local blob image: ${e}`));
+      img.src = url;
+    });
+  }
+
+  // 2. For external remote URLs, fetch as blob first to guarantee a same-origin clean buffer
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    try {
+      const response = await fetch(url, { mode: 'cors' });
+      if (response.ok) {
+        const blob = await response.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        return new Promise((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => resolve(img);
+          img.onerror = (e) => reject(new Error(`Failed to decode fetched blob image: ${e}`));
+          img.src = blobUrl;
+        });
+      }
+    } catch {
+      // Fetch failed or blocked by CORS, proceed to image element with crossOrigin
+    }
+  }
+
+  // 3. For bundled/local or remote images, always load with crossOrigin = 'anonymous'
   return new Promise((resolve, reject) => {
     const img = new Image();
-    // Only set crossOrigin on external http(s) URLs, never on blob: or data: URLs!
-    if (!url.startsWith('blob:') && !url.startsWith('data:')) {
-      img.crossOrigin = 'anonymous';
-    }
+    img.crossOrigin = 'anonymous';
     img.onload = () => resolve(img);
     img.onerror = () => {
-      // Retry without crossOrigin if browser blocked CORS
-      const retryImg = new Image();
-      retryImg.onload = () => resolve(retryImg);
-      retryImg.onerror = (e) => reject(e);
-      retryImg.src = url;
+      // Reject rather than retrying without crossOrigin, because a tainted canvas
+      // causes Chromium's WebCodecs VideoFrame constructor to throw "Invalid source state"
+      reject(new Error(`Failed to load image from ${url}. Ensure the server supports CORS or use local uploads.`));
     };
     img.src = url;
   });

@@ -49,6 +49,7 @@ export const TimelineItem: React.FC<TimelineItemProps> = ({
       <img
         src={slide.imageUrl}
         alt={`Slide ${index + 1}`}
+        crossOrigin="anonymous"
         className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105 pointer-events-none"
       />
 

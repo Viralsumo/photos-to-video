@@ -152,17 +152,26 @@ export class WebGLTransitionRenderer {
   private quadBuffer: WebGLBuffer | null = null;
 
   constructor(canvas: HTMLCanvasElement | OffscreenCanvas) {
-    const gl = (canvas.getContext('webgl', { preserveDrawingBuffer: true }) ||
-      (canvas as HTMLCanvasElement).getContext?.('experimental-webgl', { preserveDrawingBuffer: true })) as WebGLRenderingContext | null;
+    try {
+      const gl = (canvas.getContext('webgl', { preserveDrawingBuffer: true }) ||
+        (canvas as HTMLCanvasElement).getContext?.('experimental-webgl', { preserveDrawingBuffer: true })) as WebGLRenderingContext | null;
 
-    if (!gl) {
-      console.warn('WebGL not supported, falling back');
-      return;
+      if (!gl) {
+        console.warn('WebGL not supported, falling back to 2D canvas transitions');
+        return;
+      }
+
+      this.gl = gl;
+      this.initBuffers();
+      this.initTextures();
+    } catch (err) {
+      console.warn('WebGL context initialization error, using 2D fallback:', err);
+      this.gl = null;
     }
+  }
 
-    this.gl = gl;
-    this.initBuffers();
-    this.initTextures();
+  public isReady(): boolean {
+    return this.gl !== null && !this.gl.isContextLost();
   }
 
   private compileShader(src: string, type: number): WebGLShader | null {

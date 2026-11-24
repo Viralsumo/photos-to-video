@@ -84,6 +84,12 @@ export async function exportSlideshowToMp4(
   renderCanvas.height = height;
   const transitionRenderer = new WebGLTransitionRenderer(renderCanvas);
 
+  // Master output 2D canvas that VideoFrame safely sources from
+  const outputCanvas = document.createElement('canvas');
+  outputCanvas.width = width;
+  outputCanvas.height = height;
+  const outputCtx = outputCanvas.getContext('2d', { willReadFrequently: false })!;
+
   // 4. Check WebCodecs availability
   const hasWebCodecs = typeof window.VideoEncoder !== 'undefined';
 
@@ -188,8 +194,6 @@ export async function exportSlideshowToMp4(
       currentTiming.index < slideTimings.length - 1 &&
       elapsedInSlide >= currentTiming.duration - currentTiming.transitionDuration;
 
-    let targetCanvas: HTMLCanvasElement;
-
     if (isTransitioning) {
       const nextTiming = slideTimings[currentTiming.index + 1];
       const transElapsed = elapsedInSlide - (currentTiming.duration - currentTiming.transitionDuration);
@@ -202,41 +206,85 @@ export async function exportSlideshowToMp4(
       const nextSlideProgress = (transElapsed / nextTiming.duration);
       drawSlideFrame(ctxB, nextTiming.image, nextTiming.slide, nextSlideProgress, width, height);
 
-      // Render shader transition to WebGL canvas
-      transitionRenderer.render(
-        canvasA,
-        canvasB,
-        currentTiming.slide.transition.type,
-        transProgress,
-        width,
-        height
-      );
-      targetCanvas = renderCanvas;
+      let webglSucceeded = false;
+      if (transitionRenderer.isReady()) {
+        try {
+          transitionRenderer.render(
+            canvasA,
+            canvasB,
+            currentTiming.slide.transition.type,
+            transProgress,
+            width,
+            height
+          );
+          outputCtx.clearRect(0, 0, width, height);
+          outputCtx.drawImage(renderCanvas, 0, 0);
+          webglSucceeded = true;
+        } catch (glErr) {
+          console.warn('WebGL transition render failed, using 2D canvas blend:', glErr);
+        }
+      }
+
+      // High-performance 2D canvas blend fallback if WebGL was unavailable or lost
+      if (!webglSucceeded) {
+        outputCtx.clearRect(0, 0, width, height);
+        outputCtx.globalAlpha = 1.0;
+        outputCtx.drawImage(canvasA, 0, 0);
+        outputCtx.globalAlpha = transProgress;
+        outputCtx.drawImage(canvasB, 0, 0);
+        outputCtx.globalAlpha = 1.0;
+      }
     } else {
-      // Draw single slide directly
-      drawSlideFrame(ctxA, currentTiming.image, currentTiming.slide, slideProgress, width, height);
-      targetCanvas = canvasA;
+      // Draw single slide directly onto master output canvas
+      outputCtx.clearRect(0, 0, width, height);
+      drawSlideFrame(outputCtx, currentTiming.image, currentTiming.slide, slideProgress, width, height);
     }
 
-    // Create VideoFrame & encode
-    const videoFrame = new VideoFrame(targetCanvas, {
-      timestamp: timestampMicros,
-      duration: frameDurationMicros,
-    });
+    // Hardware encoder backpressure control: ensure queue stays <= 4 frames on mobile chips
+    while (videoEncoder.encodeQueueSize > 4) {
+      await new Promise<void>((resolve) => {
+        const handler = () => {
+          videoEncoder.removeEventListener('dequeue', handler);
+          resolve();
+        };
+        videoEncoder.addEventListener('dequeue', handler);
+        setTimeout(handler, 8);
+      });
+    }
 
-    const isKeyFrame = frameIndex % (fps * 2) === 0;
-    videoEncoder.encode(videoFrame, { keyFrame: isKeyFrame });
-    videoFrame.close();
+    // Construct VideoFrame safely with ImageBitmap fallback for mobile compatibility
+    let videoFrame: VideoFrame;
+    try {
+      videoFrame = new VideoFrame(outputCanvas, {
+        timestamp: timestampMicros,
+        duration: frameDurationMicros,
+      });
+    } catch {
+      // Mobile fallback: Snapshot to an immutable ImageBitmap if direct canvas source is rejected
+      const snapshot = await createImageBitmap(outputCanvas);
+      videoFrame = new VideoFrame(snapshot, {
+        timestamp: timestampMicros,
+        duration: frameDurationMicros,
+      });
+      snapshot.close();
+    }
 
-    // Update progress periodically
-    if (frameIndex % 15 === 0 || frameIndex === totalFrames - 1) {
+    try {
+      const isKeyFrame = frameIndex % (fps * 2) === 0;
+      videoEncoder.encode(videoFrame, { keyFrame: isKeyFrame });
+    } finally {
+      videoFrame.close();
+    }
+
+    // Periodic UI loop yield & progress notification
+    if (frameIndex % 10 === 0 || frameIndex === totalFrames - 1) {
       const pct = 25 + Math.round((frameIndex / totalFrames) * 60);
       onProgress({
         phase: 'rendering',
         progress: pct,
         message: `Encoded frame ${frameIndex + 1} of ${totalFrames} (${Math.round((frameIndex / totalFrames) * 100)}%)...`,
       });
-      // Yield to UI loop
+      // Yield to allow garbage collection and prevent UI freeze on mobile
       await new Promise((r) => setTimeout(r, 0));
     }
   }
